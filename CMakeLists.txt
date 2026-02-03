@@ -6,9 +6,13 @@ option(ENERGY_TEST_ENABLE_CUDA "Enable CUDA language/toolkit (if available)" OFF
 option(ENERGY_TEST_ENABLE_PYTHON "Build Python module via pybind11" ON)
 
 if(ENERGY_TEST_ENABLE_CUDA)
-    # Only enable CUDA when requested. This avoids hard-failing on machines
-    # without CUDA headers/toolkit.
     enable_language(CUDA)
+    add_executable(energy_test_app 
+        src/main.cpp 
+        src/cuda_energy_test.cu 
+        src/binder.cpp
+    )
+    target_link_libraries(energy_test_app PRIVATE energy_binder)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
