@@ -1,4 +1,5 @@
 #include "cpu_baseline.hpp"
+#include "cpu_cross_dist.hpp" // include the cross-distance version
 #include <iostream>
 #include <vector>
 #include <random>
@@ -36,9 +37,8 @@ std::vector<Point> sample_normal(
 
 using steady_clock = std::chrono::steady_clock;
 
-void run_energy_test(size_t n, size_t dim) {
-    static std::mt19937 gen(42); // fixed seed = reproducible
-
+// Run baseline CPU version
+void run_energy_test_cpu(size_t n, size_t dim, std::mt19937 &gen) {
     constexpr double delta = 0.2;
 
     auto X = sample_normal(n, dim, 0.0, gen);
@@ -63,7 +63,41 @@ void run_energy_test(size_t n, size_t dim) {
     std::cout
         << std::setw(6) << n
         << " | dim=" << dim
-        << " | stat=" << std::setw(10) << stat
+        << " | CPU stat=  " << std::setw(10) << stat
+        << " | p=" << std::setw(8) << pval
+        << " | stat_t=" << std::fixed << std::setprecision(4)
+        << stat_time.count() << "s"
+        << " | p_t=" << pval_time.count() << "s"
+        << '\n';
+}
+
+// Run cross-distance CPU version
+void run_energy_test_cross(size_t n, size_t dim, std::mt19937 &gen) {
+    constexpr double delta = 0.2;
+
+    auto X = sample_normal(n, dim, 0.0, gen);
+    auto Y = sample_normal(n, dim, delta, gen);
+
+    // ---- Warmup ----
+    CPU_cross_dist::energy_statistic(X, Y);
+
+    // ---- Energy statistic timing ----
+    auto t0 = steady_clock::now();
+    double stat = CPU_cross_dist::energy_statistic(X, Y);
+    auto t1 = steady_clock::now();
+
+    // ---- P-value timing ----
+    auto t2 = steady_clock::now();
+    double pval = CPU_cross_dist::calculate_p_value(X, Y, /*permutations=*/199);
+    auto t3 = steady_clock::now();
+
+    std::chrono::duration<double> stat_time = t1 - t0;
+    std::chrono::duration<double> pval_time = t3 - t2;
+
+    std::cout
+        << std::setw(6) << n
+        << " | dim=" << dim
+        << " | CROSS stat=" << std::setw(10) << stat
         << " | p=" << std::setw(8) << pval
         << " | stat_t=" << std::fixed << std::setprecision(4)
         << stat_time.count() << "s"
@@ -73,15 +107,19 @@ void run_energy_test(size_t n, size_t dim) {
 
 
 int main() {
-    std::vector<size_t> sample_sizes = {100, 500, 2000};
-    std::vector<size_t> dims = {2, 3, 5};
+    static std::mt19937 gen(42); // fixed seed = reproducible
+
+    std::vector<size_t> sample_sizes = {100, 500, 2000, 10000};
+    std::vector<size_t> dims = {20};
 
     for (size_t dim : dims) {
         std::cout << "\n=== Dimension " << dim << " ===\n";
         for (size_t n : sample_sizes) {
-            run_energy_test(n, dim);
-
+            run_energy_test_cpu(n, dim, gen);
+            run_energy_test_cross(n, dim, gen);
+            std::cout << "\n";
         }
+        std::cout << "------------" << std::endl;
     }
 
     return 0;
