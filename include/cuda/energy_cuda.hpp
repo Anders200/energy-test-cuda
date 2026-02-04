@@ -1,7 +1,14 @@
 #pragma once
-#include "common/energy_types.hpp"
+#include <vector>
+#include "common/point.hpp"
 
-double energy_statistic_cuda(
-    const Points2D& X,
-    const Points2D& Y
+namespace energy_test {
+namespace CUDA {
+
+double energy_statistic(
+    const std::vector<Point>& X,
+    const std::vector<Point>& Y
 );
+
+} // namespace CUDA
+} // namespace energy_test
