@@ -56,6 +56,13 @@ if(ENERGY_TEST_ENABLE_PYTHON)
     # In the Nix devShell you provided, Python is 3.11 with pybind11 installed.
     set(PYBIND11_FINDPYTHON ON)
     find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -m pybind11 --cmakedir
+        OUTPUT_VARIABLE pybind11_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
     find_package(pybind11 CONFIG REQUIRED)
 
     pybind11_add_module(energy_py src/python/energy_py.cpp)
