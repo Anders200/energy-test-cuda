@@ -1,8 +1,8 @@
 
 #include "binder.hpp"
 
-#include "cpu_baseline.hpp"
-#include "cpu_cross_dist.hpp"
+#include "cpu/cpu_baseline.hpp"
+#include "cpu/cpu_cross_dist.hpp"
 
 #include <chrono>
 #include <random>
