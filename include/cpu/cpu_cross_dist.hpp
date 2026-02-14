@@ -5,8 +5,14 @@
 #include <vector>
 #include <algorithm>
 #include <random>
+#include <numeric>
 
 namespace CPU_cross_dist {
+
+    struct PermutationStats {
+        double observed_statistic = 0.0;
+        std::vector<double> permuted_statistics; // length=permutations
+    };
 
     template <typename Point>
     double euclidean_dist(const Point& a, const Point& b) {
@@ -19,139 +25,156 @@ namespace CPU_cross_dist {
         return std::sqrt(sum);
     }
 
-    // Precompute distance matrices
+    // ============================================================
+    // Pooled distance matrix helpers
+    // ============================================================
+
+    // Build a single pooled distance matrix D for pooled = [X..., Y...].
+    // nX is the number of points belonging to X, N = pooled.size().
     template <typename Container>
-    void compute_distance_matrices(
-        const Container& X, const Container& Y,
-        std::vector<std::vector<double>>& DXX,
-        std::vector<std::vector<double>>& DYY,
-        std::vector<std::vector<double>>& DXY
+    std::vector<std::vector<double>> compute_pooled_distance_matrix(
+        const Container& X,
+        const Container& Y
     ) {
-        size_t n = X.size();
-        size_t m = Y.size();
+        const size_t nX = X.size();
+        const size_t nY = Y.size();
+        const size_t N = nX + nY;
 
-        DXX.assign(n, std::vector<double>(n, 0.0));
-        DYY.assign(m, std::vector<double>(m, 0.0));
-        DXY.assign(n, std::vector<double>(m, 0.0));
+        Container pooled = X;
+        pooled.insert(pooled.end(), Y.begin(), Y.end());
 
-        for (size_t i = 0; i < n; ++i)
-            for (size_t j = i + 1; j < n; ++j) {
-                double d = euclidean_dist(X[i], X[j]);
-                DXX[i][j] = DXX[j][i] = d;
+        std::vector<std::vector<double>> D(N, std::vector<double>(N, 0.0));
+        for (size_t i = 0; i < N; ++i) {
+            for (size_t j = i + 1; j < N; ++j) {
+                const double d = euclidean_dist(pooled[i], pooled[j]);
+                D[i][j] = D[j][i] = d;
             }
-
-        for (size_t i = 0; i < m; ++i)
-            for (size_t j = i + 1; j < m; ++j) {
-                double d = euclidean_dist(Y[i], Y[j]);
-                DYY[i][j] = DYY[j][i] = d;
-            }
-
-        for (size_t i = 0; i < n; ++i)
-            for (size_t j = 0; j < m; ++j)
-                DXY[i][j] = euclidean_dist(X[i], Y[j]);
+        }
+        return D;
     }
 
-    // Compute energy statistic using precomputed matrices
-    inline double energy_statistic_from_matrices(
-        const std::vector<std::vector<double>>& DXX,
-        const std::vector<std::vector<double>>& DYY,
-        const std::vector<std::vector<double>>& DXY
+    // Energy statistic given pooled distance matrix D and X/Y split at nX.
+    inline double energy_statistic_from_pooled(
+        const std::vector<std::vector<double>>& D,
+        size_t nX
     ) {
-        size_t n = DXX.size();
-        size_t m = DYY.size();
+        const size_t N = D.size();
+        const size_t nY = N - nX;
 
         double sumXX = 0.0;
-        for (size_t i = 0; i < n; ++i)
-            for (size_t j = i + 1; j < n; ++j)
-                sumXX += DXX[i][j];
+        for (size_t i = 0; i < nX; ++i)
+            for (size_t j = i + 1; j < nX; ++j)
+                sumXX += D[i][j];
 
         double sumYY = 0.0;
-        for (size_t i = 0; i < m; ++i)
-            for (size_t j = i + 1; j < m; ++j)
-                sumYY += DYY[i][j];
+        for (size_t i = nX; i < N; ++i)
+            for (size_t j = i + 1; j < N; ++j)
+                sumYY += D[i][j];
 
         double sumXY = 0.0;
-        for (size_t i = 0; i < n; ++i)
-            for (size_t j = 0; j < m; ++j)
-                sumXY += DXY[i][j];
+        for (size_t i = 0; i < nX; ++i)
+            for (size_t j = nX; j < N; ++j)
+                sumXY += D[i][j];
 
-        return (2.0 / (n * m)) * sumXY - (2.0 / (n * n)) * sumXX - (2.0 / (m * m)) * sumYY;
+        return (2.0 / (static_cast<double>(nX) * static_cast<double>(nY))) * sumXY
+             - (2.0 / (static_cast<double>(nX) * static_cast<double>(nX))) * sumXX
+             - (2.0 / (static_cast<double>(nY) * static_cast<double>(nY))) * sumYY;
+    }
+
+    // Energy statistic for an arbitrary permutation of pooled indices.
+    // perm is a length-N array of pooled indices; the first nX entries are treated as X.
+    inline double energy_statistic_from_pooled_permutation(
+        const std::vector<std::vector<double>>& D,
+        size_t nX,
+        const std::vector<size_t>& perm
+    ) {
+        const size_t N = D.size();
+        const size_t nY = N - nX;
+
+        double sumXX = 0.0;
+        for (size_t ii = 0; ii < nX; ++ii)
+            for (size_t jj = ii + 1; jj < nX; ++jj)
+                sumXX += D[perm[ii]][perm[jj]];
+
+        double sumYY = 0.0;
+        for (size_t ii = nX; ii < N; ++ii)
+            for (size_t jj = ii + 1; jj < N; ++jj)
+                sumYY += D[perm[ii]][perm[jj]];
+
+        double sumXY = 0.0;
+        for (size_t ii = 0; ii < nX; ++ii)
+            for (size_t jj = nX; jj < N; ++jj)
+                sumXY += D[perm[ii]][perm[jj]];
+
+        return (2.0 / (static_cast<double>(nX) * static_cast<double>(nY))) * sumXY
+             - (2.0 / (static_cast<double>(nX) * static_cast<double>(nX))) * sumXX
+             - (2.0 / (static_cast<double>(nY) * static_cast<double>(nY))) * sumYY;
+    }
+
+    // Compute observed stat (identity split) and permutation stats, reusing pooled D.
+    // Permutation representation matches CUDA: perm is a permutation of pooled indices,
+    // and the first nX entries are treated as X, the rest as Y.
+    inline PermutationStats energy_statistic_and_permutations_from_pooled(
+        const std::vector<std::vector<double>>& D,
+        size_t nX,
+        int permutations,
+        std::mt19937& gen
+    ) {
+        const size_t N = D.size();
+        PermutationStats out;
+        out.observed_statistic = energy_statistic_from_pooled(D, nX);
+        out.permuted_statistics.resize(static_cast<size_t>(permutations));
+
+        std::vector<size_t> perm(N);
+        std::iota(perm.begin(), perm.end(), 0);
+        for (int p = 0; p < permutations; ++p) {
+            if (p != 0) {
+                std::shuffle(perm.begin(), perm.end(), gen);
+            }
+            out.permuted_statistics[static_cast<size_t>(p)] =
+                energy_statistic_from_pooled_permutation(D, nX, perm);
+        }
+        return out;
+    }
+
+    template <typename Container>
+    PermutationStats energy_statistic_and_permutations(
+        const Container& X,
+        const Container& Y,
+        int permutations,
+        std::mt19937& gen
+    ) {
+        const size_t nX = X.size();
+        auto D = compute_pooled_distance_matrix(X, Y);
+        return energy_statistic_and_permutations_from_pooled(D, nX, permutations, gen);
     }
 
     template <typename Container>
     double energy_statistic(const Container& X, const Container& Y) {
-        std::vector<std::vector<double>> DXX, DYY, DXY;
-        compute_distance_matrices(X, Y, DXX, DYY, DXY);
-        return energy_statistic_from_matrices(DXX, DYY, DXY);
+        const size_t nX = X.size();
+        auto D = compute_pooled_distance_matrix(X, Y);
+        return energy_statistic_from_pooled(D, nX);
     }
 
     // Optimized p-value using precomputed pooled distance matrix
     template <typename Container>
     double calculate_p_value(Container X, Container Y, int permutations = 999) {
-        size_t n = X.size();
-        size_t m = Y.size();
-        size_t N = n + m;
+        const size_t nX = X.size();
+        const size_t nY = Y.size();
+        const size_t N = nX + nY;
 
-        // Pooled data
-        Container pooled = X;
-        pooled.insert(pooled.end(), Y.begin(), Y.end());
+        // Precompute pooled D once, then compute permutation stats from it.
+        auto D = compute_pooled_distance_matrix(X, Y);
 
-        // Precompute full pooled distance matrix
-        std::vector<std::vector<double>> D(N, std::vector<double>(N, 0.0));
-        for (size_t i = 0; i < N; ++i)
-            for (size_t j = i + 1; j < N; ++j) {
-                double d = euclidean_dist(pooled[i], pooled[j]);
-                D[i][j] = D[j][i] = d;
-            }
-
-        // Helper to compute energy statistic from indices
-        auto stat_from_indices = [&](const std::vector<size_t>& idxX) {
-            std::vector<size_t> idxY;
-            idxY.reserve(m);
-            for (size_t i = 0; i < N; ++i) {
-                if (std::find(idxX.begin(), idxX.end(), i) == idxX.end())
-                    idxY.push_back(i);
-            }
-
-            double sumXX = 0.0;
-            for (size_t i = 0; i < idxX.size(); ++i)
-                for (size_t j = i + 1; j < idxX.size(); ++j)
-                    sumXX += D[idxX[i]][idxX[j]];
-
-            double sumYY = 0.0;
-            for (size_t i = 0; i < idxY.size(); ++i)
-                for (size_t j = i + 1; j < idxY.size(); ++j)
-                    sumYY += D[idxY[i]][idxY[j]];
-
-            double sumXY = 0.0;
-            for (size_t i = 0; i < idxX.size(); ++i)
-                for (size_t j = 0; j < idxY.size(); ++j)
-                    sumXY += D[idxX[i]][idxY[j]];
-
-            return (2.0 / (idxX.size() * idxY.size())) * sumXY
-                 - (2.0 / (idxX.size() * idxX.size())) * sumXX
-                 - (2.0 / (idxY.size() * idxY.size())) * sumYY;
-        };
-
-        // Observed statistic
-        std::vector<size_t> idxX(n);
-        std::iota(idxX.begin(), idxX.end(), 0);
-        double observed_stat = stat_from_indices(idxX);
-
-        // Permutations
-        int count_greater = 0;
-        std::vector<size_t> indices(N);
-        std::iota(indices.begin(), indices.end(), 0);
         std::random_device rd;
         std::mt19937 g(rd());
+        auto stats = energy_statistic_and_permutations_from_pooled(D, nX, permutations, g);
 
-        for (int p = 0; p < permutations; ++p) {
-            std::shuffle(indices.begin(), indices.end(), g);
-            std::vector<size_t> permX(indices.begin(), indices.begin() + n);
-            double perm_stat = stat_from_indices(permX);
-            if (perm_stat >= observed_stat) count_greater++;
+        int count_greater = 0;
+        for (int i = 0; i < permutations; ++i) {
+            if (stats.permuted_statistics[static_cast<size_t>(i)] >= stats.observed_statistic)
+                count_greater++;
         }
-
         return static_cast<double>(count_greater + 1) / (permutations + 1);
     }
 

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "Point.hpp"
 
 namespace energy_test {
 

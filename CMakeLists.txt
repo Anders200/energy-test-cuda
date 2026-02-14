@@ -6,13 +6,9 @@ option(ENERGY_TEST_ENABLE_CUDA "Enable CUDA language/toolkit (if available)" OFF
 option(ENERGY_TEST_ENABLE_PYTHON "Build Python module via pybind11" ON)
 
 if(ENERGY_TEST_ENABLE_CUDA)
+    # Only enable CUDA when requested. This avoids hard-failing on machines
+    # without CUDA headers/toolkit.
     enable_language(CUDA)
-    add_executable(energy_test_app 
-        src/main.cpp 
-        src/cuda_energy_test.cu 
-        src/binder.cpp
-    )
-    target_link_libraries(energy_test_app PRIVATE energy_binder)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -50,19 +46,27 @@ endif()
 target_include_directories(energy_binder PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(energy_binder PUBLIC cpu_algorithms)
 
+# ---- CUDA backend (optional) ----
+if(ENERGY_TEST_ENABLE_CUDA)
+    add_library(cuda_backend STATIC src/cuda_cross_dist.cu)
+    set_target_properties(cuda_backend PROPERTIES CUDA_STANDARD 17)
+    # Ensure CMake doesn't try to force static CUDA runtime linkage.
+    set_target_properties(cuda_backend PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
+    target_include_directories(cuda_backend PUBLIC ${PROJECT_SOURCE_DIR}/include)
+    # Prefer the shared CUDA runtime; static runtime libs (cudadevrt/cudart_static)
+    # are not always available (notably in some Nixpkgs CUDA setups).
+    target_link_libraries(cuda_backend PUBLIC cudart)
+
+    target_link_libraries(energy_binder PUBLIC cuda_backend)
+    target_compile_definitions(energy_binder PUBLIC ENERGY_TEST_HAS_CUDA=1)
+endif()
+
 # ---- Python bindings (pybind11) ----
 if(ENERGY_TEST_ENABLE_PYTHON)
     # Prefer modern FindPython to avoid ABI mismatch (python3.11 vs python3.12 etc.).
     # In the Nix devShell you provided, Python is 3.11 with pybind11 installed.
     set(PYBIND11_FINDPYTHON ON)
     find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
-
-    execute_process(
-        COMMAND "${Python3_EXECUTABLE}" -m pybind11 --cmakedir
-        OUTPUT_VARIABLE pybind11_DIR
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-
     find_package(pybind11 CONFIG REQUIRED)
 
     pybind11_add_module(energy_py src/python/energy_py.cpp)
