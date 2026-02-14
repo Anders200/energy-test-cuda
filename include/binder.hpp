@@ -9,9 +9,8 @@
 namespace energy_test {
 
 enum class Method : std::uint8_t {
-	CPU_BASELINE,
-	CPU_CROSS_DIST,
-	CUDA_CROSS_DIST 
+	CPU_BASELINE = 0,
+	CPU_CROSS_DIST = 1,
 };
 
 struct BenchmarkConfig {

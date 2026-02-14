@@ -15,7 +15,6 @@ PYBIND11_MODULE(energy_py, m) {
     py::enum_<Method>(m, "Method")
         .value("CPU_BASELINE", Method::CPU_BASELINE)
         .value("CPU_CROSS_DIST", Method::CPU_CROSS_DIST)
-        .value("CUDA_CROSS_DIST", Method::CUDA_CROSS_DIST)
         .export_values();
 
     py::class_<BenchmarkConfig>(m, "BenchmarkConfig")

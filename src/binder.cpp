@@ -3,8 +3,6 @@
 
 #include "cpu/cpu_baseline.hpp"
 #include "cpu/cpu_cross_dist.hpp"
-#include "cuda/energy_cuda.hpp"
-#include "common/point.hpp"
 
 #include <chrono>
 #include <random>
@@ -12,6 +10,14 @@
 #include <utility>
 
 namespace energy_test {
+namespace {
+
+struct Point {
+	std::vector<double> coords;
+	std::size_t size() const { return coords.size(); }
+	double operator[](std::size_t i) const { return coords[i]; }
+};
+
 using steady_clock = std::chrono::steady_clock;
 
 std::vector<Point> sample_normal(
@@ -34,13 +40,13 @@ std::vector<Point> sample_normal(
 	}
 	return out;
 }
- // namespace
+
+} // namespace
 
 std::string method_name(Method m) {
 	switch (m) {
 		case Method::CPU_BASELINE: return "cpu_baseline";
 		case Method::CPU_CROSS_DIST: return "cpu_cross_dist";
-		case Method::CUDA_CROSS_DIST: return "cuda_cross_dist";
 		default: return "unknown";
 	}
 }
@@ -52,38 +58,26 @@ BenchmarkResult run_benchmark(const BenchmarkConfig& cfg, Method method) {
 	auto Y = sample_normal(cfg.n, cfg.dim, cfg.delta, gen);
 
 	auto run_stat = [&]() {
-	switch (method) {
-		case Method::CPU_BASELINE:
-			return CPU::energy_statistic(X, Y);
-
-		case Method::CPU_CROSS_DIST:
-			return CPU_cross_dist::energy_statistic(X, Y);
-
-		case Method::CUDA_CROSS_DIST:
-			return CUDA::energy_statistic(X, Y); // ← NOWE
-
-		default:
-			throw std::invalid_argument("Unknown method");
-	}
-};
-
+		switch (method) {
+			case Method::CPU_BASELINE:
+				return CPU::energy_statistic(X, Y);
+			case Method::CPU_CROSS_DIST:
+				return CPU_cross_dist::energy_statistic(X, Y);
+			default:
+				throw std::invalid_argument("Unknown method");
+		}
+	};
 
 	auto run_pval = [&]() {
-	switch (method) {
-		case Method::CPU_BASELINE:
-			return CPU::calculate_p_value(X, Y, cfg.permutations);
-
-		case Method::CPU_CROSS_DIST:
-			return CPU_cross_dist::calculate_p_value(X, Y, cfg.permutations);
-
-		case Method::CUDA_CROSS_DIST:
-			return CPU_cross_dist::calculate_p_value(X, Y, cfg.permutations); // ← FALLBACK
-
-		default:
-			throw std::invalid_argument("Unknown method");
-	}
-};
-
+		switch (method) {
+			case Method::CPU_BASELINE:
+				return CPU::calculate_p_value(X, Y, cfg.permutations);
+			case Method::CPU_CROSS_DIST:
+				return CPU_cross_dist::calculate_p_value(X, Y, cfg.permutations);
+			default:
+				throw std::invalid_argument("Unknown method");
+		}
+	};
 
 	if (cfg.warmup) {
 		(void)run_stat();
