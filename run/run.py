@@ -2,12 +2,35 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
+
+
+def sample_normal_py(n: int, dim: int, mean_shift: float, seed: int) -> List[List[float]]:
+	"""Generate N(0,1) points in Python.
+
+	We use Python's built-in RNG so generation is guaranteed to happen on the Python side.
+	"""
+	import random
+	rng = random.Random(int(seed))
+	out: List[List[float]] = []
+	for _ in range(int(n)):
+		out.append([rng.gauss(0.0, 1.0) + float(mean_shift) for _ in range(int(dim))])
+	return out
+
+
+def to_points(energy_py, xs: List[List[float]]):
+	pts = []
+	for row in xs:
+		p = energy_py.Point()
+		p.coords = [float(v) for v in row]
+		pts.append(p)
+	return pts
 
 
 def print_table(rows: List[Row]) -> None:
@@ -120,7 +143,11 @@ def plot(rows: List[Row], out_dir: Path) -> None:
 			(axs[1], "stat_t", "Statistic time", "seconds"),
 			(axs[2], "p_t", "P-value time", "seconds"),
 		]:
-			for method, label in [("cpu", "CPU baseline"), ("cross", "CPU cross-dist")]:
+			for method, label in [
+				("cpu", "CPU baseline"),
+				("cross", "CPU cross-dist"),
+				("cuda", "CUDA cross-dist"),
+			]:
 				xs, ys = series(method, field)
 				if xs:
 					ax.plot(xs, ys, marker="o", label=label)
@@ -146,6 +173,7 @@ def rows_from_pybind(
 	delta: float,
 	seed: int,
 	include_baseline: bool,
+	include_cuda: bool,
 ) -> List[Row]:
 	_ensure_energy_py_on_path()
 	try:
@@ -162,8 +190,25 @@ def rows_from_pybind(
 	cfg.seed = int(seed)
 	cfg.warmup = True
 
+	# CUDA note: the GPU backend now attempts all sizes, but it materializes the full pooled
+	# distance matrix D of size N*N (N=2n). Large N may be slow or run out of GPU memory.
+	if include_cuda:
+		max_n = max(sample_sizes) if sample_sizes else 0
+		max_N = 2 * int(max_n)
+		approx_bytes = 4 * (max_N * max_N)  # float32
+		approx_gib = approx_bytes / (1024**3) if max_N > 0 else 0.0
+		if max_N >= 4096:
+			print(
+				f"NOTE: CUDA enabled for large N (max N={max_N}); distance matrix is ~{approx_gib:.2f} GiB. "
+				"If you hit OOM, reduce n or run CPU-only."
+			)
+
 	# Progress prints so long runs feel alive.
-	methods_label = ["cross-dist"] + (["baseline"] if include_baseline else [])
+	methods_label = ["cross-dist"]
+	if include_baseline:
+		methods_label.append("baseline")
+	if include_cuda:
+		methods_label.append("cuda")
 	print(
 		"Running benchmarks via pybind: "
 		f"dims={list(dims)} n={list(sample_sizes)} perms={permutations} "
@@ -173,11 +218,32 @@ def rows_from_pybind(
 	methods = [energy_py.Method.CPU_CROSS_DIST]
 	if include_baseline:
 		methods.insert(0, energy_py.Method.CPU_BASELINE)
-	results = energy_py.run_benchmarks(sample_sizes, dims, cfg, methods)
+	if include_cuda:
+		if hasattr(energy_py.Method, "CUDA_CROSS_DIST"):
+			methods.append(energy_py.Method.CUDA_CROSS_DIST)
+		else:
+			print("NOTE: energy_py.Method.CUDA_CROSS_DIST not available; rebuild with CUDA enabled")
+
+	# Generate distributions in Python and pass X/Y into C++.
+	results = []
+	for dim in dims:
+		for n in sample_sizes:
+			X_py = sample_normal_py(int(n), int(dim), 0.0, seed=int(seed))
+			# Use a different seed stream for Y but keep it deterministic.
+			Y_py = sample_normal_py(int(n), int(dim), 0.0, seed=int(seed) ^ 0x9E3779B9)
+			X = to_points(energy_py, X_py)
+			Y = to_points(energy_py, Y_py)
+			for m in methods:
+				results.append(energy_py.run_benchmark_xy(cfg, m, X, Y))
 
 	out: List[Row] = []
 	for r in results:
-		method = "cpu" if r.method == energy_py.Method.CPU_BASELINE else "cross"
+		if r.method == energy_py.Method.CPU_BASELINE:
+			method = "cpu"
+		elif hasattr(energy_py.Method, "CUDA_CROSS_DIST") and r.method == energy_py.Method.CUDA_CROSS_DIST:
+			method = "cuda"
+		else:
+			method = "cross"
 		out.append(
 			Row(
 				n=int(r.n),
@@ -223,6 +289,11 @@ def main() -> None:
 		help="Also run the slow CPU baseline method (off by default)",
 	)
 	ap.add_argument(
+		"--include-cuda",
+		action="store_true",
+		help="Also run CUDA cross-dist method (requires CUDA-enabled build)",
+	)
+	ap.add_argument(
 		"--no-print",
 		action="store_true",
 		help="Don't print per-run results to stdout",
@@ -240,6 +311,7 @@ def main() -> None:
 			args.delta,
 			args.seed,
 			args.include_baseline,
+			args.include_cuda,
 		)
 
 	plot(rows, args.out_dir)

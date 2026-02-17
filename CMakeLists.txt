@@ -48,14 +48,19 @@ target_link_libraries(energy_binder PUBLIC cpu_algorithms)
 
 # ---- CUDA backend (optional) ----
 if(ENERGY_TEST_ENABLE_CUDA)
-    add_library(cuda_backend STATIC src/cuda_cross_dist.cu)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+
+    add_library(cuda_backend STATIC
+        src/kernels.cu
+        src/energy_test.cpp
+    )
     set_target_properties(cuda_backend PROPERTIES CUDA_STANDARD 17)
-    # Ensure CMake doesn't try to force static CUDA runtime linkage.
     set_target_properties(cuda_backend PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
     target_include_directories(cuda_backend PUBLIC ${PROJECT_SOURCE_DIR}/include)
-    # Prefer the shared CUDA runtime; static runtime libs (cudadevrt/cudart_static)
-    # are not always available (notably in some Nixpkgs CUDA setups).
-    target_link_libraries(cuda_backend PUBLIC cudart)
+    target_link_libraries(cuda_backend PUBLIC CUDA::cudart)
 
     target_link_libraries(energy_binder PUBLIC cuda_backend)
     target_compile_definitions(energy_binder PUBLIC ENERGY_TEST_HAS_CUDA=1)
