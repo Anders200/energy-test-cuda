@@ -8,6 +8,10 @@ option(ENERGY_TEST_ENABLE_PYTHON "Build Python module via pybind11" ON)
 if(ENERGY_TEST_ENABLE_CUDA)
     # Only enable CUDA when requested. This avoids hard-failing on machines
     # without CUDA headers/toolkit.
+    # Default to 'native' if the user didn't specify an architecture
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
     enable_language(CUDA)
 endif()
 
