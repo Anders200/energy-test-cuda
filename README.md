@@ -24,7 +24,11 @@ pip install -r requirements.txt
 cmake -B build -S .
 cmake --build build
 ```
-
+If you are using a virtual environment then build with
+```bash
+cmake -B build -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)
+cmake --build build
+```
 ---
 
 ### Run
