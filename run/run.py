@@ -230,7 +230,7 @@ def rows_from_pybind(
 		for n in sample_sizes:
 			X_py = sample_normal_py(int(n), int(dim), 0.0, seed=int(seed))
 			# Use a different seed stream for Y but keep it deterministic.
-			Y_py = sample_normal_py(int(n), int(dim), 0.0, seed=int(seed) ^ 0x9E3779B9)
+			Y_py = sample_normal_py(int(n), int(dim), delta, seed=int(seed) ^ 0x9E3779B9)
 			X = to_points(energy_py, X_py)
 			Y = to_points(energy_py, Y_py)
 			for m in methods:
@@ -278,10 +278,10 @@ def main() -> None:
 		default=repo_root() / "run" / "out",
 		help="Output directory for plots",
 	)
-	ap.add_argument("--permutations", type=int, default=199)
+	ap.add_argument("--permutations", type=int, default=500)
 	ap.add_argument("--delta", type=float, default=0.2)
 	ap.add_argument("--seed", type=int, default=42)
-	ap.add_argument("--n", nargs="*", type=int, default=[100, 500, 2000], help="Sample sizes")
+	ap.add_argument("--n", nargs="*", type=int, default=[100, 500], help="Sample sizes")
 	ap.add_argument("--dim", nargs="*", type=int, default=[2], help="Dimensions")
 	ap.add_argument(
 		"--include-baseline",
