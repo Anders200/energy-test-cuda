@@ -45,9 +45,9 @@ def print_table(rows: List[Row]) -> None:
 		rdim = [r for r in rows if r.dim == dim]
 		for n in sorted({r.n for r in rdim}):
 			for r in [x for x in rdim if x.n == n]:
-				label = "CPU" if r.method == "cpu" else "CROSS"
+				label = r.method.upper() if r.method in {"cpu", "cross", "cuda"} else r.method
 				print(
-					f"{n:7d} | dim={dim:<3d} | {label:5s} "
+					f"{n:7d} | dim={dim:<3d} | {label:5s} | "
 					f"stat={r.stat:12.6g} | p={r.p:8.4g} | "
 					f"stat_t={r.stat_t:8.4f}s | p_t={r.p_t:8.4f}s"
 				)
@@ -281,7 +281,7 @@ def main() -> None:
 	ap.add_argument("--permutations", type=int, default=500)
 	ap.add_argument("--delta", type=float, default=0.2)
 	ap.add_argument("--seed", type=int, default=42)
-	ap.add_argument("--n", nargs="*", type=int, default=[100, 500], help="Sample sizes")
+	ap.add_argument("--n", nargs="*", type=int, default=[100, 500, 1000], help="Sample sizes")
 	ap.add_argument("--dim", nargs="*", type=int, default=[2], help="Dimensions")
 	ap.add_argument(
 		"--include-baseline",
