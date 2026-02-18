@@ -64,7 +64,14 @@ if(ENERGY_TEST_ENABLE_CUDA)
     set_target_properties(cuda_backend PROPERTIES CUDA_STANDARD 17)
     set_target_properties(cuda_backend PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
     target_include_directories(cuda_backend PUBLIC ${PROJECT_SOURCE_DIR}/include)
-    target_link_libraries(cuda_backend PUBLIC CUDA::cudart)
+
+    # cuRAND linking: some toolchains don't provide an imported target CUDA::curand.
+    # Prefer CUDAToolkit-provided variables, otherwise fall back to plain library name.
+    if(DEFINED CUDAToolkit_CURAND_LIBRARY)
+        target_link_libraries(cuda_backend PUBLIC CUDA::cudart ${CUDAToolkit_CURAND_LIBRARY})
+    else()
+        target_link_libraries(cuda_backend PUBLIC CUDA::cudart curand)
+    endif()
 
     target_link_libraries(energy_binder PUBLIC cuda_backend)
     target_compile_definitions(energy_binder PUBLIC ENERGY_TEST_HAS_CUDA=1)

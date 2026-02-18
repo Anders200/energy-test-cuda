@@ -1,11 +1,11 @@
 #include "cuda/kernels.hpp"
 
 #include <cuda_runtime.h>
+#include <curand_kernel.h>
 
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
-#include <vector>
 
 namespace {
 inline void cuda_check(cudaError_t err, const char* what) {
@@ -20,8 +20,6 @@ struct Triple {
     float xy;
 };
 
-// Multi-block partial sums over i.
-// We keep the original O(N^2) work, but remove the "one block" constraint.
 __global__ void energy_stat_partials_from_pooled_D_kernel(
     const float* __restrict__ D,
     int N,
@@ -42,9 +40,7 @@ __global__ void energy_stat_partials_from_pooled_D_kernel(
     float localYY = 0.0f;
     float localXY = 0.0f;
 
-    // Partition i across blocks and threads.
     for (int ii = block; ii < N; ii += strideBlocks) {
-        // threads cooperate within this ii by striding jj
         if (ii < nX) {
             const int pi = perm ? perm[ii] : ii;
             for (int jj = ii + 1 + tid; jj < nX; jj += blockDim.x) {
@@ -144,19 +140,35 @@ static float energy_stat_from_D_on_gpu(const float* d_D, int N, int nX, const in
         - (2.0f / (fnX * fnX)) * h.xx
         - (2.0f / (nY * nY)) * h.yy;
 }
-} // namespace
 
-// TILE_SIZE 32 is standard for modern GPUs (1024 threads per block)
+__global__ void init_identity_perm_kernel(int* perm, int N) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) perm[i] = i;
+}
+
+__global__ void fisher_yates_shuffle_inplace_kernel(int* perm, int N, unsigned long long seed) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    curandStatePhilox4_32_10_t st;
+    curand_init(seed, /*subsequence=*/0, /*offset=*/0, &st);
+    for (int i = N - 1; i > 0; --i) {
+        unsigned int r = curand(&st);
+        int j = (int)(r % (unsigned int)(i + 1));
+        int tmp = perm[i];
+        perm[i] = perm[j];
+        perm[j] = tmp;
+    }
+}
+} // namespace
 
 namespace GPU {
 
 template <int D, bool CompileTimeDim>
 __global__ void compute_distance_matrix_tiled
 (
-    const float* __restrict__ data, // Combined [X, Y] array of size (n+m) * D
-    float* __restrict__ dist_mat,   // Output (n+m) * (n+m)
-    int total_points,               // n + m
-    int runtime_dim                 // Only used if CompileTimeDim is false
+    const float* __restrict__ data,
+    float* __restrict__ dist_mat,
+    int total_points,
+    int runtime_dim
 )
 {
     extern __shared__ float s_mem[];
@@ -173,8 +185,8 @@ __global__ void compute_distance_matrix_tiled
 
     if (row < total_points && col < total_points) 
     {
+        if (row > col) return;
             
-        // boundary check for loading tiles
         for (int d = 0; d < dim; ++d) 
         {
             if (ty < TILE_SIZE) tile_row[ty * dim + d] = data[row * dim + d];
@@ -182,7 +194,6 @@ __global__ void compute_distance_matrix_tiled
         }
         __syncthreads();
 
-        // euclidean distance
         float diff_sum = 0.0f;
         #pragma unroll
         for (int d = 0; d < dim; ++d) 
@@ -194,8 +205,10 @@ __global__ void compute_distance_matrix_tiled
         }
         dist = sqrtf(diff_sum);
         
-        // Write to Global Memory
         dist_mat[row * total_points + col] = dist;
+        if (row != col) {
+            dist_mat[col * total_points + row] = dist;
+        }
     }
 }
 
@@ -233,48 +246,27 @@ float GPU::p_value_from_distance_matrix(
     if (nX <= 0 || nX >= total_points) return 1.0f;
     if (permutations <= 0) permutations = 1;
 
-    // Heuristic launch shape.
     const int threads = 256;
-    int blocks = (total_points + 7) / 8; // coarse; removes single-block assumption
+    int blocks = (total_points + 7) / 8;
     if (blocks > 1024) blocks = 1024;
     if (blocks < 1) blocks = 1;
 
-    // Compute observed stat on GPU.
     const float observed = energy_stat_from_D_on_gpu(dist_mat, total_points, nX, nullptr, blocks, threads);
 
-    // For now, generate permutations on host (scales to large N without a single-thread GPU shuffle).
-    // Then copy perm to device and compute stat.
     int* d_perm = nullptr;
     cuda_check(cudaMalloc(&d_perm, static_cast<size_t>(total_points) * sizeof(int)), "cudaMalloc d_perm");
-
-    std::vector<int> h_perm(static_cast<size_t>(total_points));
     std::vector<float> perm_stats(static_cast<size_t>(permutations));
 
-    // identity (p=0)
     perm_stats[0] = observed;
 
-    // simple deterministic RNG on host
-    auto splitmix64 = [](unsigned long long& x) {
-        x += 0x9E3779B97F4A7C15ull;
-        unsigned long long z = x;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-        return z ^ (z >> 31);
-    };
-
     for (int p = 1; p < permutations; ++p) {
-        for (int i = 0; i < total_points; ++i) h_perm[static_cast<size_t>(i)] = i;
-        unsigned long long rng = seed ^ (unsigned long long)p * 0xD2B74407B1CE6E93ull;
-        for (int i = total_points - 1; i > 0; --i) {
-            const unsigned long long r = splitmix64(rng);
-            const int j = (int)(r % (unsigned long long)(i + 1));
-            std::swap(h_perm[static_cast<size_t>(i)], h_perm[static_cast<size_t>(j)]);
-        }
+        const int t = 256;
+        const int b = (total_points + t - 1) / t;
+        init_identity_perm_kernel<<<b, t>>>(d_perm, total_points);
+        cuda_check(cudaGetLastError(), "init_identity_perm launch");
+        fisher_yates_shuffle_inplace_kernel<<<1, 1>>>(d_perm, total_points, seed ^ (unsigned long long)p * 0xD2B74407B1CE6E93ull);
+        cuda_check(cudaGetLastError(), "fisher_yates_shuffle launch");
 
-        cuda_check(
-            cudaMemcpy(d_perm, h_perm.data(), static_cast<size_t>(total_points) * sizeof(int), cudaMemcpyHostToDevice),
-            "cudaMemcpy H2D perm"
-        );
         perm_stats[static_cast<size_t>(p)] = energy_stat_from_D_on_gpu(dist_mat, total_points, nX, d_perm, blocks, threads);
     }
 
