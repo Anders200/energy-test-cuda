@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 project(energy_test VERSION 0.1 LANGUAGES CXX)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(ENERGY_TEST_BUILD_SHARED "Build shared library instead of static" ON)
 option(ENERGY_TEST_ENABLE_CUDA "Enable CUDA language/toolkit (if available)" OFF)
@@ -52,7 +53,6 @@ target_link_libraries(energy_binder PUBLIC cpu_algorithms)
 
 # ---- CUDA backend (optional) ----
 if(ENERGY_TEST_ENABLE_CUDA)
-    enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
 
     set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
