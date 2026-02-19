@@ -46,10 +46,11 @@ def print_table(rows: List[Row]) -> None:
 		for n in sorted({r.n for r in rdim}):
 			for r in [x for x in rdim if x.n == n]:
 				label = r.method.upper() if r.method in {"cpu", "cross", "cuda"} else r.method
+				label = "CPU" if label == "CROSS" else label
 				print(
 					f"{n:7d} | dim={dim:<3d} | {label:5s} | "
-					f"stat={r.stat:12.6g} | p={r.p:8.4g} | "
-					f"stat_t={r.stat_t:8.4f}s | p_t={r.p_t:8.4f}s"
+					f"p={r.p:8.4g} | "
+					f"p_t={r.p_t:8.4f}s"
 				)
 
 
@@ -113,7 +114,8 @@ def parse_output(text: str) -> List[Row]:
 	return rows
 
 
-def plot(rows: List[Row], out_dir: Path) -> None:
+def plot_pvalue_vs_n(rows: List[Row], out_dir: Path) -> None:
+	"""Plot p-value time against sample size n for each dimension."""
 	try:
 		import matplotlib.pyplot as plt
 	except ModuleNotFoundError as e:
@@ -135,35 +137,87 @@ def plot(rows: List[Row], out_dir: Path) -> None:
 			ys = [getattr(r, field) for r in rdim if r.method == method]
 			return xs, ys
 
-		fig, axs = plt.subplots(1, 3, figsize=(14, 4))
+		fig, ax = plt.subplots(figsize=(8, 6))
 		fig.suptitle(f"Energy test benchmarks (dim={dim})")
 
-		for ax, field, title, ylabel in [
-			(axs[0], "stat", "Energy statistic", "stat"),
-			(axs[1], "stat_t", "Statistic time", "seconds"),
-			(axs[2], "p_t", "P-value time", "seconds"),
+		for method, label in [
+			("cpu", "CPU baseline"),
+			("cross", "CPU cross-dist"),
+			("cuda", "CUDA cross-dist"),
 		]:
-			for method, label in [
-				("cpu", "CPU baseline"),
-				("cross", "CPU cross-dist"),
-				("cuda", "CUDA cross-dist"),
-			]:
-				xs, ys = series(method, field)
-				if xs:
-					ax.plot(xs, ys, marker="o", label=label)
+			xs, ys = series(method, "p_t")
+			if xs:
+				ax.plot(xs, ys, marker="o", label=label)
 
-			ax.set_xscale("log")
-			ax.set_xlabel("n (log scale)")
-			ax.set_title(title)
-			ax.set_ylabel(ylabel)
-			ax.grid(True, which="both", linestyle=":")
-			ax.legend()
+		ax.set_xscale("log")
+		ax.set_xlabel("n (log scale)")
+		ax.set_title("P-value time")
+		ax.set_ylabel("seconds")
+		ax.grid(True, which="both", linestyle=":")
+		ax.legend()
 
 		fig.tight_layout()
 		out_path = out_dir / f"bench_dim_{dim}.png"
 		fig.savefig(out_path, dpi=160)
 		plt.close(fig)
 		print(f"Saved plot: {out_path}")
+
+
+def plot_pvalue_vs_dim(rows: List[Row], out_dir: Path) -> None:
+	"""Plot p-value time against dimensions for each sample size."""
+	try:
+		import matplotlib.pyplot as plt
+	except ModuleNotFoundError as e:
+		raise SystemExit(
+			"matplotlib is required for plotting. Install it and re-run."
+		) from e
+
+	if not rows:
+		raise SystemExit("No benchmark rows parsed from app output")
+
+	out_dir.mkdir(parents=True, exist_ok=True)
+
+	ns = sorted({r.n for r in rows})
+	for n in ns:
+		rn = [r for r in rows if r.n == n]
+
+		def series(method: str, field: str):
+			xs = [r.dim for r in rn if r.method == method]
+			ys = [getattr(r, field) for r in rn if r.method == method]
+			return xs, ys
+
+		fig, ax = plt.subplots(figsize=(8, 6))
+		fig.suptitle(f"Energy test benchmarks (n={n})")
+
+		for method, label in [
+			("cpu", "CPU baseline"),
+			("cross", "CPU cross-dist"),
+			("cuda", "CUDA cross-dist"),
+		]:
+			xs, ys = series(method, "p_t")
+			if xs:
+				ax.plot(xs, ys, marker="o", label=label)
+
+		ax.set_xlabel("Dimension")
+		ax.set_title("P-value time")
+		ax.set_ylabel("seconds")
+		ax.grid(True, which="both", linestyle=":")
+		ax.legend()
+
+		fig.tight_layout()
+		out_path = out_dir / f"bench_num_{n}.png"
+		fig.savefig(out_path, dpi=160)
+		plt.close(fig)
+		print(f"Saved plot: {out_path}")
+
+def plot(rows: List[Row], out_dir: Path, plot_type: str = "vs_n") -> None:
+	"""Route to appropriate plotting function based on plot_type."""
+	if plot_type == "vs_n":
+		plot_pvalue_vs_n(rows, out_dir)
+	elif plot_type == "vs_dim":
+		plot_pvalue_vs_dim(rows, out_dir)
+	else:
+		raise ValueError(f"Unknown plot_type: {plot_type}")
 
 
 def rows_from_pybind(
@@ -174,6 +228,7 @@ def rows_from_pybind(
 	seed: int,
 	include_baseline: bool,
 	include_cuda: bool,
+	disable_cpu: bool,
 ) -> List[Row]:
 	_ensure_energy_py_on_path()
 	try:
@@ -188,7 +243,7 @@ def rows_from_pybind(
 	cfg.permutations = int(permutations)
 	cfg.delta = float(delta)
 	cfg.seed = int(seed)
-	cfg.warmup = True
+	cfg.warmup = False
 
 	# CUDA note: the GPU backend now attempts all sizes, but it materializes the full pooled
 	# distance matrix D of size N*N (N=2n). Large N may be slow or run out of GPU memory.
@@ -204,25 +259,33 @@ def rows_from_pybind(
 			)
 
 	# Progress prints so long runs feel alive.
-	methods_label = ["cross-dist"]
-	if include_baseline:
-		methods_label.append("baseline")
+	methods_label = []
+	if not disable_cpu:
+		methods_label.append("cross-dist")
+		if include_baseline:
+			methods_label.append("baseline")
 	if include_cuda:
 		methods_label.append("cuda")
+	if not methods_label:
+		raise SystemExit("No benchmark methods selected. Enable CUDA or allow CPU methods.")
 	print(
 		"Running benchmarks via pybind: "
 		f"dims={list(dims)} n={list(sample_sizes)} perms={permutations} "
 		f"methods={methods_label}"
 	)
 
-	methods = [energy_py.Method.CPU_CROSS_DIST]
-	if include_baseline:
-		methods.insert(0, energy_py.Method.CPU_BASELINE)
+	methods = []
+	if not disable_cpu:
+		methods.append(energy_py.Method.CPU_CROSS_DIST)
+		if include_baseline:
+			methods.insert(0, energy_py.Method.CPU_BASELINE)
 	if include_cuda:
 		if hasattr(energy_py.Method, "CUDA_CROSS_DIST"):
 			methods.append(energy_py.Method.CUDA_CROSS_DIST)
 		else:
 			print("NOTE: energy_py.Method.CUDA_CROSS_DIST not available; rebuild with CUDA enabled")
+	if not methods:
+		raise SystemExit("No benchmark methods available after filtering. Rebuild with CUDA or allow CPU methods.")
 
 	# Generate distributions in Python and pass X/Y into C++.
 	results = []
@@ -234,6 +297,7 @@ def rows_from_pybind(
 			X = to_points(energy_py, X_py)
 			Y = to_points(energy_py, Y_py)
 			for m in methods:
+				print(f"Running benchmark: dim={dim} n={n} method={m}", flush=True)
 				results.append(energy_py.run_benchmark_xy(cfg, m, X, Y))
 
 	out: List[Row] = []
@@ -278,7 +342,7 @@ def main() -> None:
 		default=repo_root() / "run" / "out",
 		help="Output directory for plots",
 	)
-	ap.add_argument("--permutations", type=int, default=500)
+	ap.add_argument("--permutations", type=int, default=1000)
 	ap.add_argument("--delta", type=float, default=0.2)
 	ap.add_argument("--seed", type=int, default=42)
 	ap.add_argument("--n", nargs="*", type=int, default=[100, 500, 1000], help="Sample sizes")
@@ -294,15 +358,31 @@ def main() -> None:
 		help="Also run CUDA cross-dist method (requires CUDA-enabled build)",
 	)
 	ap.add_argument(
+		"--no-cpu",
+		action="store_true",
+		help="Disable all CPU methods (baseline and cross-dist)",
+	)
+	ap.add_argument(
 		"--no-print",
 		action="store_true",
 		help="Don't print per-run results to stdout",
+	)
+	ap.add_argument(
+		"--plot-type",
+		choices=["vs_n", "vs_dim"],
+		default="vs_n",
+		help="Plot type: vs_n for p-value time vs sample size, vs_dim for p-value time vs dimensions",
 	)
 	args = ap.parse_args()
 
 	if args.mode == "subprocess":
 		text = run_app(args.exe)
 		rows = parse_output(text)
+		if args.no_cpu:
+			print("NOTE: --no-cpu only filters output in subprocess mode; the app still ran CPU methods.")
+			rows = [r for r in rows if r.method == "cuda"]
+			if not rows:
+				raise SystemExit("No CUDA rows found in app output after --no-cpu filtering.")
 	else:
 		rows = rows_from_pybind(
 			args.n,
@@ -312,9 +392,10 @@ def main() -> None:
 			args.seed,
 			args.include_baseline,
 			args.include_cuda,
+			args.no_cpu,
 		)
 
-	plot(rows, args.out_dir)
+	plot(rows, args.out_dir, args.plot_type)
 	if not args.no_print:
 		print_table(rows)
 	print(f"Parsed {len(rows)} rows. Plots saved to: {args.out_dir}")

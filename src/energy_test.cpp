@@ -62,13 +62,7 @@ __global__ void compute_distance_matrix_tiled(
 
     // P-value computation based on pooled distance matrix D
     // (simple implementation for now; can be improved later).
-        float p = GPU::p_value_from_distance_matrix(
-        d_D,
-        N,
-        n,
-		permutations,
-		seed
-    );
+    float p = GPU::p_value_from_distance_matrix(d_D, N, n, permutations, seed);
 
     cudaFree(d_D);
     cudaFree(d_data);

@@ -113,7 +113,7 @@ BenchmarkResult run_benchmark(const BenchmarkConfig& cfg, Method method) {
 	}
 
 	auto t0 = steady_clock::now();
-	double stat = run_stat();
+	// double stat = run_stat();
 	auto t1 = steady_clock::now();
 
 	auto t2 = steady_clock::now();
@@ -129,7 +129,7 @@ BenchmarkResult run_benchmark(const BenchmarkConfig& cfg, Method method) {
 	r.dim = cfg.dim;
 	r.delta = cfg.delta;
 	r.permutations = cfg.permutations;
-	r.statistic = stat;
+	r.statistic = -1;
 	r.p_value = pval;
 	r.stat_seconds = stat_time.count();
 	r.p_value_seconds = pval_time.count();
