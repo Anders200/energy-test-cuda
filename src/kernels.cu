@@ -162,6 +162,22 @@ __global__ void fisher_yates_shuffle_inplace_kernel(int* perm, int N, unsigned l
 
 namespace GPU {
 
+__device__ __forceinline__ void triangular_tile_index_to_ij(int t, int tiles, int& out_i, int& out_j) {
+    // Map linear index t in [0, tiles*(tiles+1)/2) to (i,j) with 0<=i<=j<tiles.
+    // Ordering: row-major over i, then j from i..tiles-1.
+    // This avoids launching blocks for the lower triangle.
+    int i = 0;
+    int remaining = t;
+    while (i < tiles) {
+        int rowCount = tiles - i;
+        if (remaining < rowCount) break;
+        remaining -= rowCount;
+        ++i;
+    }
+    out_i = i;
+    out_j = i + remaining;
+}
+
 template <int D, bool CompileTimeDim>
 __global__ void compute_distance_matrix_tiled
 (
@@ -178,15 +194,21 @@ __global__ void compute_distance_matrix_tiled
     int dim = CompileTimeDim ? D : runtime_dim;
     int tx = threadIdx.x;
     int ty = threadIdx.y;
-    int row = blockIdx.y * TILE_SIZE + ty;
-    int col = blockIdx.x * TILE_SIZE + tx;
+
+    const int tiles = (total_points + TILE_SIZE - 1) / TILE_SIZE;
+    const int triTiles = tiles * (tiles + 1) / 2;
+    if (blockIdx.x >= triTiles) return;
+
+    int tile_i = 0, tile_j = 0;
+    triangular_tile_index_to_ij((int)blockIdx.x, tiles, tile_i, tile_j);
+
+    int row = tile_i * TILE_SIZE + ty;
+    int col = tile_j * TILE_SIZE + tx;
 
     float dist = 0.0f;
 
     if (row < total_points && col < total_points) 
     {
-        if (row > col) return;
-            
         for (int d = 0; d < dim; ++d) 
         {
             if (ty < TILE_SIZE) tile_row[ty * dim + d] = data[row * dim + d];
@@ -222,10 +244,10 @@ void GPU::compute_distance_matrix(
 ) {
     if (total_points <= 0 || dim <= 0) return;
     dim3 block(TILE_SIZE, TILE_SIZE);
-    dim3 grid(
-        (total_points + TILE_SIZE - 1) / TILE_SIZE,
-        (total_points + TILE_SIZE - 1) / TILE_SIZE
-    );
+
+    const int tiles = (total_points + TILE_SIZE - 1) / TILE_SIZE;
+    const int triTiles = tiles * (tiles + 1) / 2;
+    dim3 grid(triTiles, 1);
     const size_t shared_bytes = 2ull * TILE_SIZE * static_cast<size_t>(dim) * sizeof(float);
     GPU::compute_distance_matrix_tiled<0, false><<<grid, block, shared_bytes>>>(
         d_data, d_dist_mat, total_points, dim
